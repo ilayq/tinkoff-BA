@@ -2,7 +2,7 @@ import sys
 
 import base64
 from dataclasses import dataclass
-from typing import List, Iterable
+from typing import List
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import urllib.parse
@@ -46,19 +46,21 @@ def decodeULEB128(byte_arr: bytes) -> int:
     return value 
 
 
-def encodeULEB128(val: int) -> bytearray:
-    if not val:
-        return [0]
-    buf = []
-    i = 0
-    while val != 0:
-        b = val & 0x7f
-        val >>= 7
-        if val != 0:
-            b |= 0x80
-        buf.append(b)
-        i += 1
-    return bytearray(buf)
+def encodeULEB128(num: int) -> bytearray:
+    result = bytearray()
+    
+    while True:
+        byte = num & 0x7F
+        num >>= 7
+        
+        if num != 0:
+            byte |= 0x80
+            
+        result.append(byte)
+        
+        if num == 0:
+            break
+    return result if decodeULEB128(result[:len(result) - 1]) != decodeULEB128(result) else result[:len(result) - 1]
 
 
 ##################################################################### DataClasses ######################################################################################################################
@@ -312,8 +314,8 @@ def decode_packets(string):
         cmd = payload[pointer + 1]
 
 
-        cmd_body_bytes = payload[pointer + 3 : length + 1]
-
+        cmd_body_bytes = payload[pointer + 2 : length + 1]
+        print(cmd_body_bytes)
         p = Payload(
                 src=(src),
                 dst=(dst),
@@ -336,16 +338,22 @@ def encode_message_to_base64(msg: List) -> str:
     result = bytearray()
     for element in msg:
         if isinstance(element, int):
-            result.append(encodeULEB128(element))
+            # print(element, encodeULEB128(element))
+            if element < 256:
+                result.extend(bytearray([element]))
+            else:
+                result.extend(encodeULEB128(element))
         elif isinstance(element, str):
-            result.append(element.encode())
+            result.extend(element.encode())
         else:
             try:
-                result.append(encode_message_to_base64(element))
+                result.extend(encode_message_to_base64(element))
             except ValueError:
                 continue
-
-    return base64.urlsafe_b64encode(result).decode()
+    # print(result)
+    # print(base64.urlsafe_b64encode(result))
+    # while base64.urlsafe_b64encode(result).decode('utf8') == 
+    return base64.urlsafe_b64encode(result).decode('utf8')
         
 
 ################################################################################################# SERVER PART #############################################################################################################################
@@ -370,7 +378,7 @@ if __name__ == '__main__':
     # url, address = sys.argv[1], int(sys.argv[2], 16)
     # server = Server(url, address)
 
-    print(encode_message_to_base64([13, 4097, 16383, 3, 3, 6, 1689164250000, 189]))
-    string = input()
-    [print(packet) for packet in decode_packets(string)]
+    string = encode_message_to_base64([13, 819, 16383, 1, 6, 6, 1688984021000, 138]).strip("=")
 
+    print(string)
+    [print(packet) for packet in decode_packets(string)]
