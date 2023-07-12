@@ -12,11 +12,11 @@ from typing import List
 def split_bytes_by_chunks(data: bytes):
     cur = [data[0]]
     for idx in range(1, len(data)):
-        if data[idx] < data[idx - 1]:
+        if data[idx] > data[idx - 1]:
             yield bytearray(cur)
-            cur = [data[i]]
+            cur = [data[idx]]
         else:
-            cur.append(data[i])
+            cur.append(data[idx])
     if cur:
         yield cur
 
@@ -92,7 +92,7 @@ class dev_props_class:
 
 class device_class:
     dev_name: str
-    dev_props: dev_props_class
+    dev_prop = None
 
 
 ################# Implementation #####################
@@ -110,9 +110,9 @@ class timer_cmd_1_2_device_class(device_class):
 
 
 @dataclass
-class timer_cmd_1_2_body(cmd_body_class):
+class timer_cmd_1_2_body:
     dev_name: str
-    device: timer_cmd_1_2_device_class
+    dev_props = None 
 
 
 @dataclass
@@ -122,9 +122,9 @@ class smart_hub_cmd_1_2_device_class(device_class):
 
 
 @dataclass
-class smart_hub_cmd_1_2_body(cmd_body_class):
+class smart_hub_cmd_1_2_body:
     dev_name: str
-    device: smart_hub_cmd_1_2_device_class
+    dev_props = None
 
 
 @dataclass
@@ -169,7 +169,8 @@ class env_sensor_cmd_4_body(cmd_body_class):
 
 @dataclass
 class switch_cmd_1_2_body(cmd_body_class):
-    devices: List[str]
+    dev_name: str
+    dev_props: List[str]
 
 
 @dataclass
@@ -177,6 +178,8 @@ class switch_cmd_4_body(cmd_body_class):
     is_enabled: bool
 
 
+class WrongCMDError(BaseException):
+    pass
 ################################################################################ MAIN PART OF DECODING #############################################################################################################################################
 
 
@@ -206,12 +209,26 @@ def read_triggers(data: bytes):
     yield from zip(operations, values, names)
 
 
+def parse_words_from_bytes(data: bytes):
+    cur = ''
+    for byte in data:
+        if 32 <= byte <= 126:
+            cur += chr(byte)
+        else:
+            if cur:
+                yield cur
+            cur = ''
+    if cur:
+        yield cur
+
+
 def decode_cmd_body(dev_type: int, cmd: int, cmd_body_bytes: bytes) -> cmd_body_class:
     match (dev_type, cmd):
         case (1, 1) | (1, 2):
-            return smart_hub_cmd_1_2_body(dev_name=decodeULEB128(cmd_body_bytes))
+            return smart_hub_cmd_1_2_body(dev_name=cmd_body_bytes.decode('utf-8'))
+        case (1, 3) | (1, 4) | (1, 5) | (1, 6):
+            raise WrongCMDError(f'dev_type: {dev_type}\ncmd: {cmd}\nbytes: {cmd_body_bytes}')
         case (2, 1) | (2, 2):
-            #decoded_string = decodeULEB128(cmd_body_bytes)
             decoded_string = cmd_body_bytes
             dev_name = ''
             pos = 0
@@ -228,6 +245,36 @@ def decode_cmd_body(dev_type: int, cmd: int, cmd_body_bytes: bytes) -> cmd_body_
             return env_sensor_cmd_1_2_body(dev_name=dev_name,
                                            dev_props=env_sensor_props(sensors=sensors, 
                                                             triggers=triggers))
+        case (2, 3):
+            raise WrongCMDError(f'dev_type: {dev_type}\ncmd: {cmd}\nbytes: {cmd_body_bytes}')
+
+        case (2, 4):
+            nums = list(split_bytes_by_chunks(cmd_body_bytes))
+            for idx in range(len(nums)):
+                nums[idx] = decodeULEB128(nums[idx])
+            return env_sensor_cmd_4_body(nums)
+        case (2, 5) | (2, 6):
+            raise WrongCMDError(f'dev_type: {dev_type}\ncmd: {cmd}\nbytes: {cmd_body_bytes}') 
+        case (3, 1) | (3, 2):
+            words = list(parse_words_from_bytes(cmd_body_bytes))
+            return switch_cmd_1_2_body(dev_name=words[0], dev_props=words[1:len(words)])
+        case (3, 3):
+            raise WrongCMDError(f'dev_type: {dev_type}\ncmd: {cmd}\nbytes: {cmd_body_bytes}')
+        case (3, 4):
+            return switch_cmd_4_body(is_enabled=cmd_body_bytes[0])
+        case (4, 1) | (4, 2) | (5, 1) | (5, 2):
+            return lamp_and_socket_cmd_1_2_body(dev_name=cmd_body_bytes.decode('utf8'))
+        case (4, 4) | (5, 4):
+            return lamp_and_socket_cmd_4_body(is_enabled=cmd_body_bytes[0])
+        case (4, 5) | (5, 5):
+            return lamp_and_socket_cmd_5_body(command=cmd_body_bytes[0])
+        case (6, 6):
+            return timer_cmd_6_body(timestamp=decodeULEB128(cmd_body_bytes))
+        case (6, 2):
+            return timer_cmd_1_2_body(dev_name=cmd_body_bytes.decode('utf8'))
+        case _:
+            raise NotImplementedError(f'dev_type: {dev_type}\ncmd: {cmd}\nbytes: {cmd_body_bytes}')
+
 
 
 def decode_packets(string):
@@ -237,7 +284,6 @@ def decode_packets(string):
     except Exception as e:
         raise e
 
-    print(dcdstr) 
     shift = 0
     while shift < len(dcdstr):
         length = dcdstr[0 + shift]
@@ -264,7 +310,8 @@ def decode_packets(string):
         if payload[pointer + 1] < payload[pointer]:
             serial = decodeULEB128(payload[pointer : pointer + 2])
             pointer += 1
-            
+        pointer += 1 
+
         dev_type = payload[pointer]
         cmd = payload[pointer + 1]
 
@@ -277,7 +324,7 @@ def decode_packets(string):
                 serial=serial,
                 dev_type=dev_type,
                 cmd=cmd,
-                cmd_body=payload[pointer + 3 : length + 1]
+                cmd_body=decode_cmd_body(dev_type, cmd, cmd_body_bytes)
                 )
         shift += length + 2
 
@@ -289,4 +336,4 @@ def decode_packets(string):
 if __name__ == '__main__':
     string = input()
     [print(packet) for packet in decode_packets(string)]
-    print(decodeULEB128(b"\x10\x20\x10"))
+
