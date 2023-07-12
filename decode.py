@@ -90,7 +90,6 @@ class dev_props_class:
     pass
 
 
-@dataclass
 class device_class:
     dev_name: str
     dev_props: dev_props_class
@@ -99,39 +98,47 @@ class device_class:
 ################# Implementation #####################
 
 
+@dataclass
 class timer_cmd_6_body(cmd_body_class):
     timestamp: int
 
 
+@dataclass
 class timer_cmd_1_2_device_class(device_class):
     dev_name: str
     dev_props = None
 
 
+@dataclass
 class timer_cmd_1_2_body(cmd_body_class):
     dev_name: str
     device: timer_cmd_1_2_device_class
 
 
+@dataclass
 class smart_hub_cmd_1_2_device_class(device_class):
     dev_name: str
     dev_props = None 
 
 
+@dataclass
 class smart_hub_cmd_1_2_body(cmd_body_class):
     dev_name: str
     device: smart_hub_cmd_1_2_device_class
 
 
+@dataclass
 class lamp_and_socket_cmd_1_2_body(cmd_body_class):
     dev_name: str
     dev_props = None
 
 
+@dataclass
 class lamp_and_socket_cmd_4_body(cmd_body_class):
     is_enabled: bool 
 
 
+@dataclass
 class lamp_and_socket_cmd_5_body(cmd_body_class):
     command: bool
 
@@ -143,24 +150,29 @@ class env_sensor_operation:
     name: str
 
 
-class env_sensor_props(dev_props_class):
+@dataclass
+class env_sensor_props:
     sensors: int
     triggers: List[env_sensor_operation]
 
 
-class env_sensor_cmd_1_2_body(cmd_body_class):
+@dataclass
+class env_sensor_cmd_1_2_body:
     dev_name: str
     dev_props: env_sensor_props
 
 
+@dataclass
 class env_sensor_cmd_4_body(cmd_body_class):
     values: List[int]
 
 
+@dataclass
 class switch_cmd_1_2_body(cmd_body_class):
     devices: List[str]
 
 
+@dataclass
 class switch_cmd_4_body(cmd_body_class):
     is_enabled: bool
 
@@ -177,7 +189,7 @@ def read_triggers(data: bytes):
         operations.append(data[pos])
         pos += 1
         value = data[pos]
-        if data[pos + 1] < data[pos]:
+        if data[pos + 1] > data[pos]:
             value = decodeULEB128(data[pos : pos + 2])
             pos += 1
         values.append(value)
@@ -210,14 +222,12 @@ def decode_cmd_body(dev_type: int, cmd: int, cmd_body_bytes: bytes) -> cmd_body_
                 else:
                     pos = i
                     break
-            sensors = decoded_string[pos + 1]
+            sensors = decoded_string[pos]
             triggers = cmd_body_bytes[pos + 1:]
             triggers = [env_sensor_operation(*trigger) for trigger in read_triggers(triggers)]
-
-            temp_sensor = sensors
-            return env_sensor_cmd_1_2_body(dev_name,
-                                           env_sensor_props(sensors, 
-                                                            triggers))
+            return env_sensor_cmd_1_2_body(dev_name=dev_name,
+                                           dev_props=env_sensor_props(sensors=sensors, 
+                                                            triggers=triggers))
 
 
 def decode_packets(string):
