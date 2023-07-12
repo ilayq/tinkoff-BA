@@ -1,10 +1,12 @@
-# TODO CLEAR TRASH BYTES AND CONVERT CMD_BODY
-
+import sys
 
 import base64
 from dataclasses import dataclass
-from typing import List
+from typing import List, Iterable
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import urllib.parse
+import urllib.request
 
 ################################################################### ULEB128 ENCODING/DECODING AND crc8 ########################################################################################################################
 
@@ -80,7 +82,6 @@ class Packet:
     crc8: int
 
 
-@dataclass
 class cmd_body_class:
     pass
 
@@ -103,22 +104,12 @@ class timer_cmd_6_body(cmd_body_class):
     timestamp: int
 
 
-@dataclass
-class timer_cmd_1_2_device_class(device_class):
-    dev_name: str
-    dev_props = None
-
 
 @dataclass
 class timer_cmd_1_2_body:
     dev_name: str
     dev_props = None 
-
-
-@dataclass
-class smart_hub_cmd_1_2_device_class(device_class):
-    dev_name: str
-    dev_props = None 
+ 
 
 
 @dataclass
@@ -180,6 +171,12 @@ class switch_cmd_4_body(cmd_body_class):
 
 class WrongCMDError(BaseException):
     pass
+
+
+class WrongCRC8(BaseException):
+    pass
+
+
 ################################################################################ MAIN PART OF DECODING #############################################################################################################################################
 
 
@@ -276,7 +273,6 @@ def decode_cmd_body(dev_type: int, cmd: int, cmd_body_bytes: bytes) -> cmd_body_
             raise NotImplementedError(f'dev_type: {dev_type}\ncmd: {cmd}\nbytes: {cmd_body_bytes}')
 
 
-
 def decode_packets(string):
     dcdstr = ''
     try:
@@ -329,11 +325,52 @@ def decode_packets(string):
         shift += length + 2
 
         yield Packet(length=length,
-                      payload=p,
-                      crc8=crc)
+                     payload=p,
+                     crc8=crc)
+        
 
+################################################################################################# ENCODING #############################################################################################################################
+
+
+def encode_message_to_base64(msg: List) -> str:
+    result = bytearray()
+    for element in msg:
+        if isinstance(element, int):
+            result.append(encodeULEB128(element))
+        elif isinstance(element, str):
+            result.append(element.encode())
+        else:
+            try:
+                result.append(encode_message_to_base64(element))
+            except ValueError:
+                continue
+
+    return base64.urlsafe_b64encode(result).decode()
+        
+
+################################################################################################# SERVER PART #############################################################################################################################
+
+
+class Server:
+    def __init__(self, url, address):
+        self.url = url
+        self.address = address
+        self.send_initial_post()
+
+    def __send_initial_post(self):
+        raise NotImplemented()
+
+
+    ...
+    
 
 if __name__ == '__main__':
+
+
+    # url, address = sys.argv[1], int(sys.argv[2], 16)
+    # server = Server(url, address)
+
+    print(encode_message_to_base64([13, 4097, 16383, 3, 3, 6, 1689164250000, 189]))
     string = input()
     [print(packet) for packet in decode_packets(string)]
 
