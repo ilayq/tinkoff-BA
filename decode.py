@@ -60,12 +60,17 @@ def encodeULEB128(num: int) -> bytearray:
         
         if num == 0:
             break
-    return result if decodeULEB128(result[:len(result) - 1]) != decodeULEB128(result) else result[:len(result) - 1]
+    return result #if decodeULEB128(result[:len(result) - 1]) != decodeULEB128(result) else result[:len(result) - 1]
 
 
 ##################################################################### DataClasses ######################################################################################################################
 
 ############ Base classes ##################
+
+
+class cmd_body_class:
+    pass
+
 
 @dataclass
 class Payload:
@@ -74,18 +79,24 @@ class Payload:
     serial: int 
     dev_type: int 
     cmd: int
-    cmd_body: bytes
+    cmd_body: cmd_body_class
+
+    def __bytes__(self):
+        arr = bytes(encodeULEB128(self.src) + encodeULEB128(self.dst) + encodeULEB128(self.serial) + encodeULEB128(self.dev_type) + encodeULEB128(self.cmd))
+        if self.cmd_body:
+            arr += bytes(self.cmd_body)
+        return arr if arr else b''
 
 
 @dataclass
 class Packet:
     length: int
     payload: Payload
-    crc8: int
+    crc: int
 
 
-class cmd_body_class:
-    pass
+    def __bytes__(self):
+        return bytes([self.length]) + bytes(self.payload) + bytes([crc8(bytes(self.payload))])
 
 
 @dataclass
@@ -105,19 +116,28 @@ class device_class:
 class timer_cmd_6_body(cmd_body_class):
     timestamp: int
 
+    def __bytes__(self):
+        return bytes(encodeULEB128(self.timestamp))
+
 
 
 @dataclass
-class timer_cmd_1_2_body:
+class timer_cmd_1_2_body(cmd_body_class):
     dev_name: str
-    dev_props = None 
+    dev_props = None
+
+    def __bytes__(self):
+        return bytes([len(self.dev_name)]) + self.dev_name.encode()
  
 
 
 @dataclass
-class smart_hub_cmd_1_2_body:
+class smart_hub_cmd_1_2_body(cmd_body_class):
     dev_name: str
     dev_props = None
+
+    def __bytes__(self):
+        return bytes([len(self.dev_name)]) + self.dev_name.encode()
 
 
 @dataclass
@@ -125,39 +145,67 @@ class lamp_and_socket_cmd_1_2_body(cmd_body_class):
     dev_name: str
     dev_props = None
 
+    def __bytes__(self):
+        return bytes([len(self.dev_name)]) + self.dev_name.encode()
+
 
 @dataclass
 class lamp_and_socket_cmd_4_body(cmd_body_class):
-    is_enabled: bool 
+    is_enabled: bool
+
+    def __bytes__(self):
+        return bytes([self.is_enabled])
 
 
 @dataclass
 class lamp_and_socket_cmd_5_body(cmd_body_class):
     command: bool
 
+    def __bytes__(self):
+        return bytes([self.command])
+
 
 @dataclass
-class env_sensor_operation:
+class env_sensor_operation(cmd_body_class):
     op: int
     value: int
     name: str
 
+    def __bytes__(self):
+       return bytes(encodeULEB128(self.op) + encodeULEB128(self.value) + encodeULEB128(len(self.name)) + self.name.encode())
+
+
 
 @dataclass
-class env_sensor_props:
+class env_sensor_props(cmd_body_class):
     sensors: int
     triggers: List[env_sensor_operation]
 
+    def __bytes__(self):
+        triggers_bytes = bytearray()
+        for tr in self.triggers:
+            triggers_bytes.extend(bytes(tr))
+        return bytes(encodeULEB128(self.sensors) + encodeULEB128(len(self.triggers)) + triggers_bytes)
+
 
 @dataclass
-class env_sensor_cmd_1_2_body:
+class env_sensor_cmd_1_2_body(cmd_body_class):
     dev_name: str
     dev_props: env_sensor_props
+
+    def __bytes__(self):
+        return bytes([len(self.dev_name)]) + self.dev_name.encode() + bytes(self.dev_props)
 
 
 @dataclass
 class env_sensor_cmd_4_body(cmd_body_class):
     values: List[int]
+
+    def __bytes__(self):
+        s = bytearray([len(self.values)])
+        for value in self.values:
+            s += encodeULEB128(value)
+        return bytes(s)
 
 
 @dataclass
@@ -165,10 +213,21 @@ class switch_cmd_1_2_body(cmd_body_class):
     dev_name: str
     dev_props: List[str]
 
+    def __bytes__(self):
+        ans = bytearray([len(self.dev_name)])
+        ans += self.dev_name.encode()
+        ans += bytes([len(self.dev_props)])
+        for string in self.dev_props:
+            ans += bytes([len(string)]) + string.encode()
+        return bytes(ans)
+
 
 @dataclass
 class switch_cmd_4_body(cmd_body_class):
     is_enabled: bool
+
+    def __bytes__(self):
+        return bytes([self.is_enabled])
 
 
 class WrongCMDError(BaseException):
@@ -330,7 +389,7 @@ def decode_packets(string):
 
         yield Packet(length=length,
                      payload=p,
-                     crc8=crc)
+                     crc=crc)
         
 
 ################################################################################################# ENCODING #############################################################################################################################
@@ -368,8 +427,8 @@ class Server(BaseHTTPRequestHandler):
         self.name = "myhub"
         self.__make_cmd_1_template()
 
-    def __send_initial_post(self, msg: str):
-        request = urllib.request.Request(url=self.url, method="POST", data=msg.encode())
+    def __send_initial_request(self, msg: bytes):
+        request = urllib.request.Request(url=self.url, method="POST", data=msg)
         s = urllib.request.urlopen(request).read().decode()
         print(s)
         [print(pack) for pack in decode_packets(s)]
@@ -385,32 +444,22 @@ class Server(BaseHTTPRequestHandler):
         #         "dev_name": self.name
         #     }
         # }
-
-        payload =  {
-            "src": self.address,    
-            "dst": 16383,
-            "serial": 1,
-            "dev_type": 1,
-            "cmd": 1,
-            "cmd_body": {
-                "dev_name": self.name
-            }
-        }
-        
-        bytestring = encodeULEB128(payload["src"]) + encodeULEB128(payload["dst"]) + encodeULEB128(payload["serial"]) + encodeULEB128(payload["dev_type"]) + encodeULEB128(payload["cmd"]) + bytearray([len(payload["cmd_body"]["dev_name"].encode())]) + bytearray(payload["cmd_body"]["dev_name"].encode())
-        crc = crc8(bytestring)
-        length = len(bytestring)
-        print(bytestring)
-        print(length)
-        # msg = [length, payload["src"], payload["dst"], payload['serial'], payload['dev_type'], payload['cmd'], chr(b'\x05') + payload["cmd_body"]["dev_name"], crc]
-        # print(msg)
-        # encoded = encode_message_to_base64(msg).strip("=")
-        # print(encoded)
-        encoded = base64.urlsafe_b64encode(bytearray([length]) + bytestring + bytearray([crc]))
-        print(encoded)
-        # self.__send_initial_post(encoded)
-
-    ...
+        payload = Payload(
+            src=self.address,
+            dst=16383,
+            serial=self.serial,
+            dev_type=1,
+            cmd=1,
+            cmd_body=smart_hub_cmd_1_2_body(
+                dev_name=self.name
+            )
+        )
+        packet = Packet(
+            length=len(bytes(payload)),
+            payload=payload,
+            crc=crc8(bytes(payload))
+        )
+        self.__send_initial_request(base64.urlsafe_b64encode(bytes(packet)))
     
 
 if __name__ == '__main__':
@@ -420,25 +469,31 @@ if __name__ == '__main__':
     server = Server(url, address)
 
     ################################ TESTS ########################################################################################
-    # print(list(decode_packets("DAH_fwEBAQVIVUIwMeE")))
-    # print(list(decode_packets("DAH_fwIBAgVIVUIwMak")))    
-    # print(list(decode_packets("OAL_fwMCAQhTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI03Q")))
-    # print(list(decode_packets("OAL_fwQCAghTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI09w")))
-    # print(list(decode_packets("BQECBQIDew")))
-    # print(list(decode_packets("EQIBBgIEBKUB2jbUjgaMjfILoQ")))
-    # print(list(decode_packets("IgP_fwcDAQhTV0lUQ0gwMQMFREVWMDEFREVWMDIFREVWMDO1")))
-    # print(list(decode_packets("IgP_fwgDAghTV0lUQ0gwMQMFREVWMDEFREVWMDIFREVWMDMo")))
-    # print(list(decode_packets("BQEDCQMDoA")))
-    # print(list(decode_packets("BgMBCgMEAac")))
-    # print(list(decode_packets("DQT_fwsEAQZMQU1QMDG8")))
-    # print(list(decode_packets("DQT_fwwEAgZMQU1QMDGU")))
-    # print(list(decode_packets("BQEEDQQDqw")))
-    # print(list(decode_packets("BgQBDgQEAaw")))
-    # print(list(decode_packets("BgEEDwQFAeE")))
-    # print(list(decode_packets("DwX_fxAFAQhTT0NLRVQwMQ4")))
-    # print(list(decode_packets("DwX_fxEFAghTT0NLRVQwMc0")))
-    # print(list(decode_packets("BQEFEgUD5A")))
-    # print(list(decode_packets("BgUBEwUEAQ8")))
-    # print(list(decode_packets("BgEFFAUFAQc")))
-    # print(list(decode_packets("Dgb_fxUGAQdDTE9DSzAxHA")))
-    # print(list(decode_packets("DAb_fxgGBpabldu2NNM")))
+    # tests = []
+    # tests.append("DAH_fwEBAQVIVUIwMeE")
+    # tests.append("DAH_fwIBAgVIVUIwMak")    
+    # tests.append("OAL_fwMCAQhTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI03Q")
+    # tests.append("OAL_fwQCAghTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI09w")
+    # tests.append("BQECBQIDew")
+    # tests.append("EQIBBgIEBKUB2jbUjgaMjfILoQ")
+    # tests.append("IgP_fwcDAQhTV0lUQ0gwMQMFREVWMDEFREVWMDIFREVWMDO1")
+    # tests.append("IgP_fwgDAghTV0lUQ0gwMQMFREVWMDEFREVWMDIFREVWMDMo")
+    # tests.append("BQEDCQMDoA")
+    # tests.append("BgMBCgMEAac")
+    # tests.append("DQT_fwsEAQZMQU1QMDG8")
+    # tests.append("DQT_fwwEAgZMQU1QMDGU")
+    # tests.append("BQEEDQQDqw")
+    # tests.append("BgQBDgQEAaw")
+    # tests.append("BgEEDwQFAeE")
+    # tests.append("DwX_fxAFAQhTT0NLRVQwMQ4")
+    # tests.append("DwX_fxEFAghTT0NLRVQwMc0")
+    # tests.append("BQEFEgUD5A")
+    # tests.append("BgUBEwUEAQ8")
+    # tests.append("BgEFFAUFAQc")
+    # tests.append("Dgb_fxUGAQdDTE9DSzAxHA")
+    # tests.append("DAb_fxgGBpabldu2NNM")
+
+
+    # for test in tests:
+    #     for packet in decode_packets(test):
+    #         assert bytes(packet) == base64.urlsafe_b64decode(test + '==='), (bytes(packet), base64.urlsafe_b64decode(test + '==='))
